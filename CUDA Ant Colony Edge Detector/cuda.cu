@@ -5,7 +5,6 @@
 #include <cv.h>
 #include <highgui.h>
 #include <cuda.h>
-#include <cutil.h>
 #include <cuda_runtime.h>
 #include <cuda_runtime_api.h>
 #include <math_functions.h>
@@ -14,7 +13,10 @@
 #include <algorithm>
 
 #include "ant.h"
-#include "cutil_inline.h"
+#include "cutil/cutil.h"
+
+
+//#include "cutil_inline.h"
 
 using namespace std;
 
@@ -177,7 +179,7 @@ __global__ void walk(ant ants[ANTS], unsigned long seed){
 		if (r < acumulatedSum) next = last->neigh[i];
 	}
 	if (!next){
-		if (admissibleCount) next = admissible[admissibleCount - 1];
+		if (admissibleCount) next = admissible[admissibleCount];
 		else {
 			next = ants[antIndex].path[(int)myRand(antIndex * 31 + seed) * 32768 % ants[antIndex].path.size()];
 		}

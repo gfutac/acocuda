@@ -1,51 +1,41 @@
-#include "pixel.h"
+#include "position.h"
 
-struct myVector{
-	pixel *pixels[40];
+struct vector{
+	position *visitedPositions[40];
 	int pos;
 	int len;
 	int count;
 
-	__host__ myVector() {}
+	vector() { }
 
-	__host__ __device__ myVector(int _len){
-		len = _len;
+	__device__ vector(int len) : len(len) {
 		pos = 0;
 		count = 0;
 	}
 
-	__device__ void push_back(pixel *elem){
-		pos = count % len;
-		count += 1;
-		pixels[pos] = elem;
+	__device__ void push_back(position *elem){
+		pos = count++ % len;
+		visitedPositions[pos] = elem;
 	}
 
-	__device__ pixel* last(){
-		return pixels[pos];
+	__device__ position* last(){
+		return visitedPositions[pos];
 	}
 
-	__device__ pixel* penultimate(){
+	__device__ position* penultimate(){
 		int position = pos - 1;
 		if (position < 0) position = len - 1;
-		return pixels[position];
+		return visitedPositions[position];
 	}
 
-	__device__ pixel* operator[](int index){
-		return pixels[index];
+	__device__ position* operator[](int index){
+		return visitedPositions[index];
 	}
 
-	__device__ bool contains(pixel* other){
+	__device__ bool contains(position* other){
 		for (int i = 0; i < len; ++i){
-			if (pixels[i] == other) return true;
+			if (visitedPositions[i] == other) return true;
 		}
 		return false;
-	}
-
-	__host__ __device__ int size(){
-		return len;
-	}
-
-	__host__ __device__ int getCount(){
-		return count;
 	}
 };

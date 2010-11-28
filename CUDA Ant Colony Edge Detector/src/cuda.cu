@@ -10,7 +10,6 @@
 #include <math_functions.h>
 
 #include <map>
-#include <algorithm>
 
 #include "ant.h"
 #include "cutil/cutil.h"
@@ -22,16 +21,6 @@ using namespace std;
 
 #define ANTS 1024
 
-#define error(msg) {\
-			cudaThreadSynchronize();\
-			cudaError_t err = cudaGetLastError();\
-			if( cudaSuccess != err) {\
-				fprintf(stderr, "Cuda error: %s in file '%s' in line %i : %s.\n", \
-					msg, __FILE__, __LINE__, cudaGetErrorString( err ) );\
-					exit(EXIT_FAILURE);\
-			}\
-		}
-
 void showImage(IplImage *img){
 	cvNamedWindow("Slika", CV_WINDOW_AUTOSIZE);
 	cvMoveWindow("Slika", 440, 65);
@@ -39,14 +28,11 @@ void showImage(IplImage *img){
 	while(true) if (cvWaitKey(10) == 27) break;
 	cvDestroyWindow("Slika");
 }
-//
-///////////////////////////////////////////////////////////////////////////////////////////////
-//
 
-__device__ pixel d_imageMatrix[512][512];
-__device__ float alpha = 1.5;
-__device__ float beta = 3.5;
-__device__ float testSum[512];
+__device__ position d_imageMatrix[512][512];
+__device__ float alpha = 4;
+__device__ float beta = 2;
+__device__ float sum[1024];
 
 
 __device__ float getMax(float vals[4]){
@@ -58,16 +44,11 @@ __device__ float getMax(float vals[4]){
 }
 
 __device__ float myRand(unsigned long seed){
-//	int i = blockIdx.x * blockDim.x + threadIdx.x;
-//	seed = seed + i;
 	unsigned long next = seed * 1103515245 + 12345;
 	unsigned long temp = ((unsigned)(next/65536) % 32768);
 	return (float)temp/32768;
 }
 
-/**
- * Normalizira vrijednosti slike sivih razina.
- */
 __global__ void setImageValues(float *img, size_t pitch, float maxValue){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 	int j = blockIdx.y * blockDim.y + threadIdx.y;
@@ -80,10 +61,7 @@ __global__ void setImageValues(float *img, size_t pitch, float maxValue){
 	d_imageMatrix[i][j].tao = 0.001;
 }
 
-/**
- * svakom pixelu odreduje vidljivost (heuristika) i postavlja mu susjede (eksplicitno gradi graf u memoriji,
- * veca prostorna slozenost programa, manja vremenska).
- */
+
 __global__ void setNeighs(int height, int width){
     float tl, tm, tr;
     float ml, mr;
@@ -127,19 +105,19 @@ __global__ void setAnts(ant ants[ANTS]){
 
 	int x = ants[i].startx;
 	int y = ants[i].starty;
-	//postavlja mrava na pocetnu poziciju
 	ants[i].push_back(&d_imageMatrix[x][y]);
-	atomicAdd(&d_imageMatrix[x][y].antCount, 1);
 }
 
 __global__ void walk(ant ants[ANTS], unsigned long seed){
 	int antIndex = blockIdx.x * blockDim.x + threadIdx.x;
-	pixel *admissible[8];
+	if (antIndex >= ANTS) return;
+	
 	int admissibleCount = 0;
-	pixel *last = ants[antIndex].path.last();
+	position *admissible[8];
+	position *last = ants[antIndex].path.last();
 
-	float probabilities[8];
-	float probSum = 0;
+	double probabilities[8];
+	double probSum = 0;
 
 	if (ants[antIndex].path.getCount() == 1){
 		for (int i = 0; i < last->neighCount; ++i){
@@ -148,32 +126,34 @@ __global__ void walk(ant ants[ANTS], unsigned long seed){
 		}
 
 		for (int i = 0; i < admissibleCount; ++i){
-			pixel *tmp = last->neigh[i];
-			float probability = pow(tmp->tao, alpha) * pow(tmp->ni, beta);
+			position *tmp = last->neigh[i];
+			double probability = powf(tmp->tao, alpha) * powf(tmp->ni, beta);
 			probabilities[i] = probability;
 			probSum += probability;
 		}
 	}
 
 	else if (ants[antIndex].path.getCount() > 1){
-		pixel *penultimate = ants[antIndex].path.penultimate();
+		position *penultimate = ants[antIndex].path.penultimate();
+		
 		for (int neighbors = 0; neighbors < last->neighCount; ++neighbors){
-			if (ants[antIndex].path.contains(last->neigh[neighbors]) || last->neigh[neighbors] == penultimate) continue;
+			if (ants[antIndex].path.contains(last->neigh[neighbors]) || (last->neigh[neighbors] == penultimate)) continue;
 			admissible[admissibleCount++] = last->neigh[neighbors];
 		}
 		--admissibleCount;
 
 		for (int i = 0; i < admissibleCount; ++i){
-			pixel *tmp = admissible[i];
-			float probability = pow(tmp->tao, alpha) * pow(tmp->ni, beta);
+			position *tmp = admissible[i];
+			double probability = powf(tmp->tao, alpha) * powf(tmp->ni, beta);
 			probabilities[i] = probability;
 			probSum += probability;
 		}
 	}
 
-	float r = myRand(antIndex * 17 + seed) * probSum;
-	float acumulatedSum = 0;
-	pixel *next = 0;
+		
+	double r = myRand(antIndex + seed) * probSum;
+	double acumulatedSum = 0;
+	position *next = 0;
 	for (int i = 0; i < admissibleCount; ++i){
 		acumulatedSum += probabilities[i];
 		if (r < acumulatedSum) next = last->neigh[i];
@@ -181,8 +161,10 @@ __global__ void walk(ant ants[ANTS], unsigned long seed){
 	if (!next){
 		if (admissibleCount) next = admissible[admissibleCount];
 		else {
-			next = ants[antIndex].path[(int)myRand(antIndex * 31 + seed) * 32768 % ants[antIndex].path.size()];
+			int index = (int)myRand(seed << 3) * 32786 % ants[antIndex].path.size();
+			next = ants[antIndex].path[index];
 		}
+		//next = ants[antIndex].path[0];
 	}
 
 	atomicAdd(&next->antCount, 1);
@@ -197,18 +179,19 @@ __global__ void updateTrails(){
 	if (d_imageMatrix[i][j].ni >= 0.08) {
 		sum = d_imageMatrix[i][j].ni * d_imageMatrix[i][j].antCount;
 	}
-	d_imageMatrix[i][j].tao = d_imageMatrix[i][j].tao * (1 - 0.02) + sum;
+	d_imageMatrix[i][j].tao = d_imageMatrix[i][j].tao * (1 - 0.04) + sum;
 	d_imageMatrix[i][j].antCount = 0;
 }
 
 
 int main(int argc, char *argv[]){
-	IplImage *in = cvLoadImage("/home/gf43122/work/eclipse/workspace/ACO2/resources/lena512s.png", CV_LOAD_IMAGE_GRAYSCALE);
+	IplImage *in = cvLoadImage(argv[1], CV_LOAD_IMAGE_GRAYSCALE);
 	int height = in->height;
 	int width = in->width;
 //	showImage(in);
 
 	float maxValue = 0;
+/*
 	float *hostImageValues = (float *)malloc(height * width * sizeof(float));
 	for (int i = 0; i < height; ++i){
 		for (int j = 0; j < width; ++j){
@@ -216,7 +199,15 @@ int main(int argc, char *argv[]){
 			maxValue = maxValue > *(hostImageValues + i * width + j) ? maxValue : *(hostImageValues + i * width + j);
 		}
 	}
-
+	
+*/	
+	float hostImageValues[512][512];
+	for (int i = 0; i < height; ++i){
+		for (int j = 0; j < width; ++j){
+			hostImageValues[i][j] = cvGet2D(in, i, j).val[0];
+			maxValue = maxValue > hostImageValues[i][j] ? maxValue : hostImageValues[i][j];
+		}
+	}
 
 	float *imageIntensityValues;
 	size_t pitch;
@@ -258,14 +249,14 @@ int main(int argc, char *argv[]){
 	setAnts<<<32, 32>>>(deviceAnts);
 
 
-	for (int i = 0; i < 512; ++i){
+	int iter = atoi(argv[2]);
+	for (int i = 0; i < iter; ++i){
 		walk<<<32, 32>>>(deviceAnts, (unsigned)time(NULL));
 		updateTrails<<<numBlocks, threadsPerBlock>>>();
 	}
 
-
-	pixel *slika = (pixel *)malloc(512 * 512 * sizeof(pixel));
-	cudaMemcpyFromSymbol(slika, "d_imageMatrix", 512 * 512 * sizeof(pixel), 0, cudaMemcpyDeviceToHost);
+	position *slika = (position *)malloc(512 * 512 * sizeof(position));
+	cudaMemcpyFromSymbol(slika, "d_imageMatrix", 512 * 512 * sizeof(position), 0, cudaMemcpyDeviceToHost);
 
 	IplImage *out = cvCreateImage(cvSize(width, height), IPL_DEPTH_8U, 1);
 
@@ -275,6 +266,8 @@ int main(int argc, char *argv[]){
 			total = total  + slika[i * width + j].tao;
 		}
 	}
+	
+	printf("%f\n", total);
 	total /= (width * height);
 
 	for (int i = 0; i < height; ++i){
@@ -283,13 +276,14 @@ int main(int argc, char *argv[]){
 		}
 	}
 
-	showImage(out);
-	cvReleaseImage(&out);
-
-	cvReleaseImage(&in);
 	cudaFree(imageIntensityValues);
 	cudaFree(deviceAnts);
-	free(hostImageValues);
+	//free(hostImageValues);
+
+	showImage(out);
+	cvReleaseImage(&out);
+	cvReleaseImage(&in);
+
 	free(slika);
     return 0;
 }

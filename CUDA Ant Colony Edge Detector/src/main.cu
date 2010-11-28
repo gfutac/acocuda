@@ -34,8 +34,14 @@ using namespace std;
 __device__ position deviceImage[512][512];
 __device__ float broj;
 
-texture<float, 2, cudaReadModeElementType> imageValues;
-texture<float, 2, cudaReadModeElementType> heuristics;
+texture<float, 2, cudaReadModeElementType> imageValuesTexture;
+texture<float, 2, cudaReadModeElementType> heuristicsTexture;
+
+__device__ float myRand(unsigned long seed){
+	unsigned long next = seed * 1103515245 + 12345;
+	unsigned long temp = ((unsigned)(next/65536) % 32768);
+	return (float)temp/32768;
+}
 
 __global__ void init(float *values, size_t pitch, float maxValue){
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -47,54 +53,55 @@ __global__ void init(float *values, size_t pitch, float maxValue){
 	deviceImage[i][j].antCount = 0;
 }
 
-//__global__ void setHeuristics(float *heuristics, int pitch){
-//	float tl, tm, tr;
-//	float ml, mr;
-//	float bl, bm, br;
-//
-//	int i = blockIdx.x * blockDim.x + threadIdx.x;
-//	int j = blockIdx.y * blockDim.y + threadIdx.y;
-//
-//	float intens[4];
-//	float current = tex2D(imageValues, i, j);
-//
-//	tl = (i - 1 >= 0 && j - 1 >= 0) ? tex2D(imageValues, i - 1, j - 1) : current;
-//	br = (i + 1 <= HEIGHT && j + 1 <= WIDTH) ? tex2D(imageValues, i - 1, j - 1) : current;
-//	tr = (i - 1 >= 0 && j + 1 <= WIDTH) ? tex2D(imageValues, i - 1, j + 1) : current;
-//	bl = (i + 1 <= HEIGHT && j - 1 >= 0) ? tex2D(imageValues, i + 1, j - 1) : current;
-//	tm = (i - 1 >= 0) ? tex2D(imageValues, i - 1, j) : current;
-//	bm = (i + 1 < HEIGHT) ? tex2D(imageValues, i + 1, j) : current;
-//	ml = (j - 1 >= 0) ? tex2D(imageValues, i, j - 1) : current;
-//	mr = (j + 1 < WIDTH) ? tex2D(imageValues, i, j + 1) : current;
-//
-//	intens[0] = fabs(tl - br);
-//	intens[1] = fabs(tr - bl);
-//	intens[2] = fabs(ml - mr);
-//	intens[3] = fabs(tm - bm);
-//
-//	float max = intens[0];
-//	for (int k = 1; k < 4; ++k) {
-//		max = max > intens[i] ? max : intens[i];
-//	}
-//	float *q = (float *)((char *)heuristics + j * pitch) + i;
-//	*q = current * max;
-//
-//	int index = 0;
-//	if (i - 1 >= 0 && j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j-1];
-//	if (i + 1 < HEIGHT && j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j+1];
-//	if (i - 1 >= 0 && j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j+1];
-//	if (i + 1 < HEIGHT && j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j-1];
-//	if (i - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j];
-//	if (i + 1 < HEIGHT) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j];
-//	if (j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i][j-1];
-//	if (j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i][j+1];
-//
-//	deviceImage[i][j].neighCount = index;
-//	broj = deviceImage[0][0].neighCount;
-//}
+__global__ void setHeuristics(float *heuristics, int pitch){
+	float tl, tm, tr;
+	float ml, mr;
+	float bl, bm, br;
+
+	int i = blockIdx.x * blockDim.x + threadIdx.x;
+	int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+	float intens[4];
+	float current = tex2D(imageValuesTexture, i, j);
+
+	tl = (i - 1 >= 0 && j - 1 >= 0) ? tex2D(imageValuesTexture, i - 1, j - 1) : current;
+	br = (i + 1 <= HEIGHT && j + 1 <= WIDTH) ? tex2D(imageValuesTexture, i - 1, j - 1) : current;
+	tr = (i - 1 >= 0 && j + 1 <= WIDTH) ? tex2D(imageValuesTexture, i - 1, j + 1) : current;
+	bl = (i + 1 <= HEIGHT && j - 1 >= 0) ? tex2D(imageValuesTexture, i + 1, j - 1) : current;
+	tm = (i - 1 >= 0) ? tex2D(imageValuesTexture, i - 1, j) : current;
+	bm = (i + 1 < HEIGHT) ? tex2D(imageValuesTexture, i + 1, j) : current;
+	ml = (j - 1 >= 0) ? tex2D(imageValuesTexture, i, j - 1) : current;
+	mr = (j + 1 < WIDTH) ? tex2D(imageValuesTexture, i, j + 1) : current;
+
+
+	intens[0] = fabs(tl - br);
+	intens[1] = fabs(tr - bl);
+	intens[2] = fabs(ml - mr);
+	intens[3] = fabs(tm - bm);
+
+	float max = intens[0];
+	for (int k = 1; k < 4; ++k) {
+		max = max > intens[k] ? max : intens[k];
+	}
+
+	float *currentHeuristicValue = (float *)((char *)heuristics + j * pitch) + i;
+	*currentHeuristicValue = current * max;
+
+	int index = 0;
+	if (i - 1 >= 0 && j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j-1];
+	if (i + 1 < HEIGHT && j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j+1];
+	if (i - 1 >= 0 && j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j+1];
+	if (i + 1 < HEIGHT && j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j-1];
+	if (i - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i-1][j];
+	if (i + 1 < HEIGHT) deviceImage[i][j].neigh[index++] = &deviceImage[i+1][j];
+	if (j - 1 >= 0) deviceImage[i][j].neigh[index++] = &deviceImage[i][j-1];
+	if (j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i][j+1];
+
+	deviceImage[i][j].neighCount = index;
+}
 
 __global__ void test(){
-	broj = tex2D(imageValues, 0, 0);
+	broj = tex2D(heuristicsTexture, 50,50);
 }
 
 int main(int argc, char **argv){
@@ -117,30 +124,54 @@ int main(int argc, char **argv){
 	dim3 numBlocks(HEIGHT / threadsPerBlock.x, WIDTH / threadsPerBlock.y);
 
 	//normaliziranje slike sivih razina, inicijalizacija feromonskih tragova
-	float *deviceImageValues;
+	float *deviceImageProperties;
 	size_t pitch;
-	cudaMallocPitch((void **)&deviceImageValues, &pitch, sizeof(float) * WIDTH, HEIGHT);
-	cudaMemcpy(deviceImageValues, hostImageValues, sizeof(float) * HEIGHT * WIDTH, cudaMemcpyHostToDevice);
-	init<<<numBlocks, threadsPerBlock>>>(deviceImageValues, pitch, maxValue);
 
+	cudaMallocPitch((void **)&deviceImageProperties, &pitch, sizeof(float) * WIDTH, HEIGHT);
+	cudaMemcpy(deviceImageProperties, hostImageValues, sizeof(float) * HEIGHT * WIDTH, cudaMemcpyHostToDevice);
+
+	init<<<numBlocks, threadsPerBlock>>>(deviceImageProperties, pitch, maxValue);
+	//kraj inicijalizacije
+
+	//"bindanje" matrice sivih razina u memorijski dio za texture (konstanta memorija brza od globalne)
 	cudaArray *imageValuesArray;
-	cudaChannelFormatDesc cd = imageValues.channelDesc;
-	cudaMallocArray(&imageValuesArray, &cd, WIDTH, HEIGHT);
-	cudaMemcpyToArray(imageValuesArray, 0, 0, deviceImageValues, sizeof(float) * HEIGHT * WIDTH, cudaMemcpyDeviceToDevice);
-	imageValues.addressMode[0] = cudaAddressModeWrap;
-	imageValues.addressMode[1] = cudaAddressModeWrap;
-	imageValues.filterMode     = cudaFilterModePoint;
-	imageValues.normalized     = false;
-	cudaBindTextureToArray(&imageValues, imageValuesArray, &cd);
-	test<<<1, 1>>>();
+	cudaChannelFormatDesc cd = imageValuesTexture.channelDesc;
 
+	cudaMallocArray(&imageValuesArray, &cd, WIDTH, HEIGHT);
+	cudaMemcpyToArray(imageValuesArray, 0, 0, deviceImageProperties, sizeof(float) * HEIGHT * WIDTH, cudaMemcpyDeviceToDevice);
+
+	imageValuesTexture.addressMode[0] = cudaAddressModeWrap;
+	imageValuesTexture.addressMode[1] = cudaAddressModeWrap;
+	imageValuesTexture.filterMode     = cudaFilterModePoint;
+	imageValuesTexture.normalized     = false;
+
+	cudaBindTextureToArray(&imageValuesTexture, imageValuesArray, &cd);
+	//kraj bindanja
+
+	setHeuristics<<<numBlocks, threadsPerBlock>>>(deviceImageProperties, pitch);
+	cudaArray *heuristicsArray;
+	cd = heuristicsTexture.channelDesc;
+
+	cudaMallocArray(&heuristicsArray, &cd, WIDTH, HEIGHT);
+	cudaMemcpyToArray(heuristicsArray, 0, 0, deviceImageProperties, sizeof(float) * HEIGHT * WIDTH, cudaMemcpyDeviceToDevice);
+
+	heuristicsTexture.addressMode[0] = cudaAddressModeWrap;
+	heuristicsTexture.addressMode[1] = cudaAddressModeWrap;
+	heuristicsTexture.filterMode     = cudaFilterModePoint;
+	heuristicsTexture.normalized     = false;
+
+	cudaBindTextureToArray(&heuristicsTexture, heuristicsArray, &cd);
+	//kraj bindanja
+
+	test<<<1, 1>>>();
 	float t;
 	cudaMemcpyFromSymbol(&t, "broj", sizeof(float), 0, cudaMemcpyDeviceToHost);
 	cout << t << endl;
 
 
 	cvReleaseImage(&inputIplImage);
-	cudaFree(deviceImageValues);
+	cudaFree(deviceImageProperties);
 	cudaFreeArray(imageValuesArray);
+	cudaFreeArray(heuristicsArray);
 	return 0;
 }

@@ -3,6 +3,8 @@
 struct ant{
 	vector path;
 
+	ant () { }
+
 	__device__ ant(int r){
 		path = vector(r);
 	}

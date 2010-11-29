@@ -34,13 +34,15 @@ using namespace std;
 __device__ position deviceImage[512][512];
 __device__ float broj;
 
+
 texture<float, 2, cudaReadModeElementType> imageValuesTexture;
 texture<float, 2, cudaReadModeElementType> heuristicsTexture;
 
-__device__ float myRand(unsigned long seed){
+__device__ int myRand(unsigned long seed){
 	unsigned long next = seed * 1103515245 + 12345;
 	unsigned long temp = ((unsigned)(next/65536) % 32768);
-	return (float)temp/32768;
+//	return (float)temp/32768;
+	return temp;
 }
 
 __global__ void init(float *values, size_t pitch, float maxValue){
@@ -98,6 +100,23 @@ __global__ void setHeuristics(float *heuristics, int pitch){
 	if (j + 1 < WIDTH) deviceImage[i][j].neigh[index++] = &deviceImage[i][j+1];
 
 	deviceImage[i][j].neighCount = index;
+}
+
+__device__ int indeksi[1024];
+__global__ void setAnts(ant *ants, unsigned long seed){
+	int antIndex = blockDim.x * blockIdx.x + threadIdx.x;
+	int currentSeed = (seed + antIndex) << 5;
+	int randIndex = myRand(currentSeed) % ANTS;
+
+	int i = randIndex / 32;
+	int j = randIndex % 32;
+	//atomic compare and swap
+	while (atomicCAS(&deviceImage[i][j].antCount, 1, 1)){
+		currentSeed <<= 1;
+		randIndex = myRand(currentSeed) % ANTS;
+	}
+	atomicAdd(&deviceImage[i][j].antCount, 1);
+	indeksi[antIndex] = randIndex;
 }
 
 __global__ void test(){
@@ -163,14 +182,25 @@ int main(int argc, char **argv){
 	cudaBindTextureToArray(&heuristicsTexture, heuristicsArray, &cd);
 	//kraj bindanja
 
-	test<<<1, 1>>>();
-	float t;
-	cudaMemcpyFromSymbol(&t, "broj", sizeof(float), 0, cudaMemcpyDeviceToHost);
-	cout << t << endl;
+	ant *ants;
+	cudaMalloc(&ants, sizeof(ant) * ANTS);
+
+//	setAnts<<<32, 32>>>(ants, (unsigned)time(0));
+
+
+
+//	test<<<1, 1>>>();
+//	int t[1024];
+//	cudaMemcpyFromSymbol(t, "indeksi", sizeof(float) * 1024, 0, cudaMemcpyDeviceToHost);
+//	for (int i = 0; i < ANTS; ++i)
+//		cout << t[i] << " ";
+//	cout << endl;
+
 
 
 	cvReleaseImage(&inputIplImage);
 	cudaFree(deviceImageProperties);
+	cudaFree(ants);
 	cudaFreeArray(imageValuesArray);
 	cudaFreeArray(heuristicsArray);
 	return 0;
